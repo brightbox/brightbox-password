@@ -1,0 +1,59 @@
+require 'fileutils'
+GPG = "/usr/bin/env gpg"
+RECIPIENTS = "" # List recipients here as so "-r bob@example.com -r jim@example.com"
+GIT = "/usr/bin/env git"
+
+task :default => [:commit, :refresh]
+
+desc "Encrypts all passwords and pushes them to the remote repository"
+task :commit => [:encrypt] do
+  system("#{GIT} add ./encrypted/*")
+  system("#{GIT} commit -v")
+  system("#{GIT} push origin master")
+end
+
+desc "Fetches the passwords from the remote repository and decrypts any which have changed"
+task :refresh => [:pull, :decrypt]
+
+task :pull do
+  system("#{GIT} pull origin master")
+end
+
+desc "Encrypts all the passwords which have changed in the decrypted directory"
+task :encrypt => [:check_dirs_exist] do
+  decrypted_files = Dir["./decrypted/*"]
+  encrypted_files = Dir["./encrypted/*"]
+  decrypted_files.each do |file|
+    matching_file = encrypted_files.grep(/#{File.basename(file)}/).pop
+    if matching_file && File.mtime(file) > File.mtime(matching_file)
+      File.delete(matching_file)
+      system("#{GPG} #{RECIPIENTS} --armor --encrypt --sign --output #{matching_file} #{file}")
+      FileUtils.touch([file, matching_file])
+    elsif matching_file.nil?
+      system("#{GPG} #{RECIPIENTS} --armor --encrypt --sign --output encrypted/#{File.basename(file)}.asc #{file}")
+      FileUtils.touch([file, "encrypted/#{File.basename(file)}.asc"])
+    end
+  end
+end
+
+desc "Decrypts all the passwords which have changed in the encrypted directory"
+task :decrypt => [:check_dirs_exist] do
+  decrypted_files = Dir["./decrypted/*"]
+  encrypted_files = Dir["./encrypted/*"]
+  encrypted_files.each do |file|
+    matching_file = decrypted_files.grep(/#{File.basename(file).gsub(".asc", "")}/).pop
+    if matching_file && File.mtime(file) > File.mtime(matching_file)
+      File.delete(matching_file)
+      system("#{GPG} #{RECIPIENTS} --armor --decrypt --output #{matching_file} #{file}")
+      FileUtils.touch([file, matching_file])
+    elsif matching_file.nil?
+      system("#{GPG} #{RECIPIENTS} --armor --decrypt --output decrypted/#{File.basename(file).gsub(".asc", "")} #{file}")
+      FileUtils.touch([file, "decrypted/#{File.basename(file).gsub(".asc", "")}"])
+    end
+  end
+end
+
+task :check_dirs_exist do
+  FileUtils.mkdir_p("./decrypted/")
+  FileUtils.mkdir_p("./encrypted/")
+end
